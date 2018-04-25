@@ -47,8 +47,8 @@ MAX_SCALING = 1e+04
 
 # CG tolerances
 CG_RATE = 2
-CG_MIN_TOL = 1e-01
-CG_MAX_TOL = 1e-09
+CG_MIN_TOL = 1e-09
+CG_MAX_TOL = 1e-01
 
 class workspace(object):
     """
@@ -316,7 +316,7 @@ class linsys_solver(object):
         # Store method
         self.method = work.settings.linsys_solver
 
-    def solve_cg(self, b, x, tol=1e-03, max_iters=0):
+    def solve_cg(self, b, x, iter_idx, max_iters=0):
 
         # Assign variables
         A = self.KKT_cg
@@ -324,6 +324,12 @@ class linsys_solver(object):
 
         if max_iters == 0:
             max_iters = A.shape[0]
+
+        # Compute tolerance
+        tol = np.linalg.norm(b) * 1. / ((iter_idx + 1) ** CG_RATE) * CG_MAX_TOL
+        tol = np.maximum(tol, CG_MIN_TOL)
+
+        #  print("iter_idx = %i, cg tol = %.2e, " % (iter_idx, tol), end='')
 
         # Initialize algorithm
         r = A.dot(x) - b
@@ -344,17 +350,19 @@ class linsys_solver(object):
             # Check if residual is less than tolerance
             norm_r = np.linalg.norm(r)
             if norm_r < tol:
+                #  print("cg iter = %i" % k)
                 return x
+
 
         print("CG did not converge within %i iterations, residual %.2e > tolerance %.2e\n" % (max_iters, norm_r, tol))
         return x
 
-    def solve(self, rhs, x, tol=1e-03, max_iters=100):
+    def solve(self, rhs, x, iter_idx):
         """
         Solve linear system with given factorization
         """
         if self.method == INDIRECT_SOLVER:
-            return self.solve_cg(rhs, x, tol=tol, max_iters=max_iters)
+            return self.solve_cg(rhs, x, iter_idx)
 
         else:
             return self.kkt_factor.solve(rhs)
@@ -697,7 +705,8 @@ class OSQP(object):
                             self.work.y)
 
             x_tilde = self.work.linsys_solver.solve(rhs,
-                                                    self.work.xz_tilde[:self.work.data.n], tol=1e-03)
+                                                    self.work.xz_tilde[:self.work.data.n],
+                                                    self.work.iter)
 
             z_tilde = self.work.data.A.dot(x_tilde)
             self.work.xz_tilde = np.hstack((x_tilde, z_tilde))
@@ -1253,6 +1262,10 @@ class OSQP(object):
 
         # ADMM algorithm
         for iter in range(1, self.work.settings.max_iter + 1):
+
+            # Store iter in work
+            self.work.iter = iter
+
             # Update x_prev, z_prev
             self.work.x_prev = np.copy(self.work.x)
             self.work.z_prev = np.copy(self.work.z)
