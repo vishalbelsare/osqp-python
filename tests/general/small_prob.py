@@ -70,7 +70,7 @@ res = model.solve()
 
 # OSQPPUREPY
 model = osqppurepy.OSQP()
-model.setup(P=P, q=q, A=A, l=l, u=u, **osqp_opts)
+model.setup(P=P, q=q, A=A, l=l, u=u, linsys_solver=2, **osqp_opts)
 res_purepy = model.solve()
 
 

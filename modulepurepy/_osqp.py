@@ -39,11 +39,16 @@ OSQP_NAN = 1e+20  # Just as placeholder. Not real value
 
 # Linear system solver options
 SUITESPARSE_LDL_SOLVER = 0
+INDIRECT_SOLVER = 2
 
 # Scaling
 MIN_SCALING = 1e-04
 MAX_SCALING = 1e+04
 
+# CG tolerances
+CG_RATE = 2
+CG_MIN_TOL = 1e-01
+CG_MAX_TOL = 1e-09
 
 class workspace(object):
     """
@@ -285,22 +290,75 @@ class linsys_solver(object):
         """
         Initialize structure for KKT system solution
         """
-        # Construct reduced KKT matrix
-        KKT = spspa.vstack([
-              spspa.hstack([work.data.P + work.settings.sigma *
-                            spspa.eye(work.data.n), work.data.A.T]),
-              spspa.hstack([work.data.A, -spspa.diags(work.rho_inv_vec)])])
 
-        # Initialize structure
-        self.kkt_factor = spla.splu(KKT.tocsc())
-        #  self.lu, self.piv = sp.linalg.lu_factor(KKT.todense())
+        if work.settings.linsys_solver == INDIRECT_SOLVER:
 
-    def solve(self, rhs):
+            # Precompute matrices
+            self.Psigma = work.data.P + work.settings.sigma * spspa.eye(work.data.n)
+
+            A = work.data.A
+            rho_mat = spspa.diags(work.rho_vec)
+            self.KKT_cg = self.Psigma + A.T.dot(rho_mat.dot(A))
+
+            # Compute inverse preconditioner
+            self.inv_KKT_prec = spspa.diags(np.reciprocal(self.KKT_cg.diagonal()))
+
+        else:
+            # Construct standard KKT matrix (direct method)
+            KKT = spspa.vstack([
+                  spspa.hstack([work.data.P + work.settings.sigma *
+                                spspa.eye(work.data.n), work.data.A.T]),
+                  spspa.hstack([work.data.A, -spspa.diags(work.rho_inv_vec)])])
+
+            # Initialize structure
+            self.kkt_factor = spla.splu(KKT.tocsc())
+
+        # Store method
+        self.method = work.settings.linsys_solver
+
+    def solve_cg(self, b, x, tol=1e-03, max_iters=0):
+
+        # Assign variables
+        A = self.KKT_cg
+        invM = self.inv_KKT_prec
+
+        if max_iters == 0:
+            max_iters = A.shape[0]
+
+        # Initialize algorithm
+        r = A.dot(x) - b
+        y = invM.dot(r)  # M * y = r
+        p = -y
+        for k in range(max_iters):
+            # Perform CG iterations
+            ry = r.dot(y)
+            Ap = A.dot(p)
+            alpha = ry / (p.dot(Ap))
+            x = x + alpha * p
+            r = r + alpha * Ap
+            y = invM.dot(r)
+            ry_new = r.dot(y)
+            beta = ry_new / ry
+            p = -y + beta * p
+
+            # Check if residual is less than tolerance
+            norm_r = np.linalg.norm(r)
+            if norm_r < tol:
+                return x
+
+        print("CG did not converge within %i iterations, residual %.2e > tolerance %.2e\n" % (max_iters, norm_r, tol))
+        return x
+
+    def solve(self, rhs, x, tol=1e-03, max_iters=100):
         """
         Solve linear system with given factorization
         """
-        return self.kkt_factor.solve(rhs)
-        #  return sp.linalg.lu_solve((self.lu, self.piv), rhs)
+        if self.method == INDIRECT_SOLVER:
+            return self.solve_cg(rhs, x, tol=tol, max_iters=max_iters)
+
+        else:
+            return self.kkt_factor.solve(rhs)
+            #  return sp.linalg.lu_solve((self.lu, self.piv), rhs)
 
 
 class results(object):
@@ -436,7 +494,6 @@ class OSQP(object):
             inf_norm_q = np.linalg.norm(q, np.inf)
             inf_norm_q = self._limit_scaling(inf_norm_q)
             scale_cost = np.maximum(inf_norm_q, norm_P_cols)
-            #  import ipdb; ipdb.set_trace()
             scale_cost = self._limit_scaling(scale_cost)
             scale_cost = 1. / scale_cost
 
@@ -463,7 +520,6 @@ class OSQP(object):
         if self.work.settings.verbose:
             print("Final cost scaling = %.10f" % c)
 
-        # import ipdb; ipdb.set_trace()
 
         # Assign scaled problem
         self.work.data = problem((n, m), P.data, P.indices, P.indptr, q,
@@ -565,6 +621,8 @@ class OSQP(object):
         print("settings: ", end='')
         if settings.linsys_solver == SUITESPARSE_LDL_SOLVER:
             print("linear system solver = suitesparse ldl\n          ", end='')
+        else:
+            print("linear system solver = indirect cg\n ", end='')
         print("eps_abs = %.2e, eps_rel = %.2e," %
               (settings.eps_abs, settings.eps_rel))
         print("          eps_prim_inf = %.2e, eps_dual_inf = %.2e," %
@@ -632,19 +690,31 @@ class OSQP(object):
         """
         First ADMM step: update xz_tilde
         """
-        # Compute rhs and store it in xz_tilde
-        self.work.xz_tilde[:self.work.data.n] = \
-            self.work.settings.sigma * self.work.x_prev - self.work.data.q
-        self.work.xz_tilde[self.work.data.n:] = \
-            self.work.z_prev - self.work.rho_inv_vec * self.work.y
+        if self.work.settings.linsys_solver == INDIRECT_SOLVER:
+            rhs = self.work.settings.sigma * self.work.x_prev \
+                    - self.work.data.q + \
+                    self.work.data.A.T.dot(self.work.rho_vec * self.work.z_prev -
+                            self.work.y)
 
-        # Solve linear system
-        self.work.xz_tilde = self.work.linsys_solver.solve(self.work.xz_tilde)
+            x_tilde = self.work.linsys_solver.solve(rhs,
+                                                    self.work.xz_tilde[:self.work.data.n], tol=1e-03)
 
-        # Update z_tilde
-        self.work.xz_tilde[self.work.data.n:] = \
-            self.work.z_prev + self.work.rho_inv_vec * \
-            (self.work.xz_tilde[self.work.data.n:] - self.work.y)
+            z_tilde = self.work.data.A.dot(x_tilde)
+            self.work.xz_tilde = np.hstack((x_tilde, z_tilde))
+        else:
+            # Direct method
+            # Compute rhs and store it in xz_tilde
+            self.work.xz_tilde[:self.work.data.n] = \
+                self.work.settings.sigma * self.work.x_prev - self.work.data.q
+            self.work.xz_tilde[self.work.data.n:] = \
+                self.work.z_prev - self.work.rho_inv_vec * self.work.y
+
+            # Solve linear system
+            self.work.xz_tilde = self.work.linsys_solver.solve(self.work.xz_tilde)
+
+            self.work.xz_tilde[self.work.data.n:] = \
+                self.work.z_prev + self.work.rho_inv_vec * \
+                (self.work.xz_tilde[self.work.data.n:] - self.work.y)
 
     def update_x(self):
         """
