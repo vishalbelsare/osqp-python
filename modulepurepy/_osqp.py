@@ -325,6 +325,8 @@ class linsys_solver(object):
         if max_iters == 0:
             max_iters = A.shape[0]
 
+        #  max_iters = 1
+
         # Compute tolerance
         tol = np.linalg.norm(b) * 1. / ((iter_idx + 1) ** CG_RATE) * CG_MAX_TOL
         tol = np.maximum(tol, CG_MIN_TOL)
@@ -354,7 +356,7 @@ class linsys_solver(object):
                 return x
 
 
-        print("CG did not converge within %i iterations, residual %.2e > tolerance %.2e\n" % (max_iters, norm_r, tol))
+        # print("CG did not converge within %i iterations, residual %.2e > tolerance %.2e\n" % (max_iters, norm_r, tol))
         return x
 
     def solve(self, rhs, x, iter_idx):
