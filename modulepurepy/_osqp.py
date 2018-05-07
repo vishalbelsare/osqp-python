@@ -46,9 +46,8 @@ MIN_SCALING = 1e-04
 MAX_SCALING = 1e+04
 
 # CG tolerances
-CG_RATE = 2
-CG_MIN_TOL = 1e-09
-CG_MAX_TOL = 1e-01
+CG_RATE = 1.3
+CG_ITERS = []
 
 class workspace(object):
     """
@@ -323,21 +322,21 @@ class linsys_solver(object):
         invM = self.inv_KKT_prec
 
         if max_iters == 0:
-            max_iters = A.shape[0]
+            max_iters = x.shape[0]
 
         #  max_iters = 1
 
-        # Compute tolerance
-        tol = np.linalg.norm(b) * 1. / ((iter_idx + 1) ** CG_RATE) * CG_MAX_TOL
-        tol = np.maximum(tol, CG_MIN_TOL)
-
-        #  print("iter_idx = %i, cg tol = %.2e, " % (iter_idx, tol), end='')
 
         # Initialize algorithm
         r = A.dot(x) - b
         y = invM.dot(r)  # M * y = r
         p = -y
-        for k in range(max_iters):
+
+        global CG_TOL, CG_ITERS
+        k = 0
+        if iter_idx == 1: CG_TOL = 0.1*np.linalg.norm(r)
+        while not np.linalg.norm(r) < 1/(iter_idx)**CG_RATE * CG_TOL \
+            and k < max_iters:
             # Perform CG iterations
             ry = r.dot(y)
             Ap = A.dot(p)
@@ -349,14 +348,10 @@ class linsys_solver(object):
             beta = ry_new / ry
             p = -y + beta * p
 
-            # Check if residual is less than tolerance
-            norm_r = np.linalg.norm(r)
-            if norm_r < tol:
-                #  print("cg iter = %i" % k)
-                return x
+            k = k + 1  # Increase iteration
 
+        CG_ITERS.append(k)
 
-        # print("CG did not converge within %i iterations, residual %.2e > tolerance %.2e\n" % (max_iters, norm_r, tol))
         return x
 
     def solve(self, rhs, x, iter_idx):
@@ -1151,6 +1146,14 @@ class OSQP(object):
             print("run time:             %.2es" % (self.work.info.run_time))
         print("optimal rho estimate: %.2es" %
                 (self.work.info.rho_estimate))
+
+        print("Average CG iters:", np.mean(CG_ITERS))
+        print("Total CG iters:", np.sum(CG_ITERS))
+        import matplotlib.pyplot as plt
+        plt.plot(CG_ITERS, linestyle='None', marker='o')
+        plt.ylabel('# CG iterations')
+        plt.xlabel('ADMM iteration')
+        plt.show()
 
         print("")  # Print last space
 
