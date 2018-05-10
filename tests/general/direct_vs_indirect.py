@@ -6,8 +6,8 @@ import numpy as np
 
 sp.random.seed(6)
 
-n = 200
-m = 300
+n = 2000
+m = 3000
 
 # Add constraints
 A = sparse.random(m, n, density=0.4, format='csc')
