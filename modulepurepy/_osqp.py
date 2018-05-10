@@ -497,8 +497,8 @@ class OSQP(object):
                 E_temp = spspa.diags(s_temp[self.work.data.n:])
 
             # Scale data in place
-            P = D_temp.dot(P.dot(D_temp)).tocsc()
-            A = E_temp.dot(A.dot(D_temp)).tocsc()
+            P = D_temp.dot(P.dot(D_temp))
+            A = E_temp.dot(A.dot(D_temp))
             q = D_temp.dot(q)
             l = E_temp.dot(l)
             u = E_temp.dot(u)
@@ -539,6 +539,8 @@ class OSQP(object):
             print("Final cost scaling = %.10f" % c)
 
 
+        P = P.tocsc()
+        A = A.tocsc()
         # Assign scaled problem
         self.work.data = problem((n, m), P.data, P.indices, P.indptr, q,
                                  A.data, A.indices, A.indptr, l, u)
