@@ -291,16 +291,13 @@ class linsys_solver(object):
         """
 
         if work.settings.linsys_solver == INDIRECT_SOLVER:
-            # Use csr format for fast mat-vec products
-            # We might need to avoid copies if we're tight on memory
-            self.P = work.data.P.tocsr()
-            self.A = work.data.A.tocsr()
-            self.A_T = work.data.A.T.tocsr()
+            self.P = work.data.P
+            self.A = work.data.A
             self.rho_mat = spspa.diags(work.rho_vec)
             self.sigma = work.settings.sigma
 
             self.KKT_cg = lambda x: self.P.dot(x) + self.sigma*x + \
-                self.A_T.dot(self.rho_mat.dot(self.A.dot(x)))
+                self.A.T.dot(self.rho_mat.dot(self.A.dot(x)))
             self.compute_preconditioner()
             '''
             # Compare to preconditioner obtained with dense calculations
@@ -328,7 +325,7 @@ class linsys_solver(object):
 
         rho_sqrt_mat = self.rho_mat.sqrt()
         for i in range(len(diagonal)):
-            diagonal[i] += spla.norm(self.A_T[i].dot(rho_sqrt_mat))**2
+            diagonal[i] += spla.norm(rho_sqrt_mat.dot(self.A[:, i]))**2
         self.inv_KKT_prec = spspa.diags(np.reciprocal(diagonal))
 
     def solve_cg(self, b, x, iter_idx, max_iters=0):
