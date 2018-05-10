@@ -291,17 +291,24 @@ class linsys_solver(object):
         """
 
         if work.settings.linsys_solver == INDIRECT_SOLVER:
+            # Use csr format for fast mat-vec products
+            # We might need to avoid copies if we're tight on memory
+            self.P = work.data.P.tocsr()
+            self.A = work.data.A.tocsr()
+            self.A_T = work.data.A.T.tocsr()
+            self.rho_mat = spspa.diags(work.rho_vec)
+            self.sigma = work.settings.sigma
 
-            # Precompute matrices
-            self.Psigma = work.data.P + work.settings.sigma * spspa.eye(work.data.n)
-
+            self.KKT_cg = lambda x: self.P.dot(x) + self.sigma*x + \
+                self.A_T.dot(self.rho_mat.dot(self.A.dot(x)))
+            self.compute_preconditioner()
+            '''
+            # Compare to preconditioner obtained with dense calculations
+            Psigma = work.data.P + work.settings.sigma * spspa.eye(work.data.n)
             A = work.data.A
-            rho_mat = spspa.diags(work.rho_vec)
-            self.KKT_cg = self.Psigma + A.T.dot(rho_mat.dot(A))
-
-            # Compute inverse preconditioner
-            self.inv_KKT_prec = spspa.diags(np.reciprocal(self.KKT_cg.diagonal()))
-
+            KKT_cg_dense = Psigma + A.T.dot(self.rho_mat.dot(A))
+            np.testing.assert_allclose(self.inv_KKT_prec.diagonal(), np.reciprocal(KKT_cg_dense.diagonal()))
+            '''
         else:
             # Construct standard KKT matrix (direct method)
             KKT = spspa.vstack([
@@ -314,6 +321,15 @@ class linsys_solver(object):
 
         # Store method
         self.method = work.settings.linsys_solver
+
+    def compute_preconditioner(self):
+        diagonal = self.P.diagonal()
+        diagonal += self.sigma
+
+        rho_sqrt_mat = self.rho_mat.sqrt()
+        for i in range(len(diagonal)):
+            diagonal[i] += spla.norm(self.A_T[i].dot(rho_sqrt_mat))**2
+        self.inv_KKT_prec = spspa.diags(np.reciprocal(diagonal))
 
     def solve_cg(self, b, x, iter_idx, max_iters=0):
 
@@ -328,7 +344,7 @@ class linsys_solver(object):
 
 
         # Initialize algorithm
-        r = A.dot(x) - b
+        r = A(x) - b
         y = invM.dot(r)  # M * y = r
         p = -y
 
@@ -339,7 +355,7 @@ class linsys_solver(object):
             and k < max_iters:
             # Perform CG iterations
             ry = r.dot(y)
-            Ap = A.dot(p)
+            Ap = A(p)
             alpha = ry / (p.dot(Ap))
             x = x + alpha * p
             r = r + alpha * Ap
@@ -1594,8 +1610,14 @@ class OSQP(object):
         self.work.rho_vec[eq_ind] = RHO_EQ_OVER_RHO_INEQ * self.work.settings.rho
         self.work.rho_inv_vec = np.reciprocal(self.work.rho_vec)
 
-        # Factorize KKT
-        self.work.linsys_solver = linsys_solver(self.work)
+        if self.work.settings.linsys_solver == INDIRECT_SOLVER:
+            # Update rho & recalculate preconditioner
+            self.work.linsys_solver.rho_mat = spspa.diags(self.work.rho_vec)
+            self.work.linsys_solver.compute_preconditioner()
+        else:
+            # Factorize KKT
+            self.work.linsys_solver = linsys_solver(self.work)
+
 
     def update_alpha(self, alpha_new):
         """
