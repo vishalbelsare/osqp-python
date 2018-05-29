@@ -46,9 +46,8 @@ MIN_SCALING = 1e-04
 MAX_SCALING = 1e+04
 
 # CG tolerances
-CG_RATE = 2
-CG_MIN_TOL = 1e-09
-CG_MAX_TOL = 1e-01
+CG_RATE = 1.3
+CG_ITERS = []
 
 class workspace(object):
     """
@@ -292,17 +291,21 @@ class linsys_solver(object):
         """
 
         if work.settings.linsys_solver == INDIRECT_SOLVER:
+            self.P = work.data.P
+            self.A = work.data.A
+            self.rho_mat = spspa.diags(work.rho_vec)
+            self.sigma = work.settings.sigma
 
-            # Precompute matrices
-            self.Psigma = work.data.P + work.settings.sigma * spspa.eye(work.data.n)
-
+            self.KKT_cg = lambda x: self.P.dot(x) + self.sigma*x + \
+                self.A.T.dot(self.rho_mat.dot(self.A.dot(x)))
+            self.compute_preconditioner()
+            '''
+            # Compare to preconditioner obtained with dense calculations
+            Psigma = work.data.P + work.settings.sigma * spspa.eye(work.data.n)
             A = work.data.A
-            rho_mat = spspa.diags(work.rho_vec)
-            self.KKT_cg = self.Psigma + A.T.dot(rho_mat.dot(A))
-
-            # Compute inverse preconditioner
-            self.inv_KKT_prec = spspa.diags(np.reciprocal(self.KKT_cg.diagonal()))
-
+            KKT_cg_dense = Psigma + A.T.dot(self.rho_mat.dot(A))
+            np.testing.assert_allclose(self.inv_KKT_prec.diagonal(), np.reciprocal(KKT_cg_dense.diagonal()))
+            '''
         else:
             # Construct standard KKT matrix (direct method)
             KKT = spspa.vstack([
@@ -316,6 +319,15 @@ class linsys_solver(object):
         # Store method
         self.method = work.settings.linsys_solver
 
+    def compute_preconditioner(self):
+        diagonal = self.P.diagonal()
+        diagonal += self.sigma
+
+        rho_sqrt_mat = self.rho_mat.sqrt()
+        for i in range(len(diagonal)):
+            diagonal[i] += spla.norm(rho_sqrt_mat.dot(self.A[:, i]))**2
+        self.inv_KKT_prec = spspa.diags(np.reciprocal(diagonal))
+
     def solve_cg(self, b, x, iter_idx, max_iters=0):
 
         # Assign variables
@@ -323,24 +335,24 @@ class linsys_solver(object):
         invM = self.inv_KKT_prec
 
         if max_iters == 0:
-            max_iters = A.shape[0]
+            max_iters = x.shape[0]
 
         #  max_iters = 1
 
-        # Compute tolerance
-        tol = np.linalg.norm(b) * 1. / ((iter_idx + 1) ** CG_RATE) * CG_MAX_TOL
-        tol = np.maximum(tol, CG_MIN_TOL)
-
-        #  print("iter_idx = %i, cg tol = %.2e, " % (iter_idx, tol), end='')
 
         # Initialize algorithm
-        r = A.dot(x) - b
+        r = A(x) - b
         y = invM.dot(r)  # M * y = r
         p = -y
-        for k in range(max_iters):
+
+        global CG_TOL, CG_ITERS
+        k = 0
+        if iter_idx == 1: CG_TOL = 0.1*np.linalg.norm(r)
+        while not np.linalg.norm(r) < 1/(iter_idx)**CG_RATE * CG_TOL \
+            and k < max_iters:
             # Perform CG iterations
             ry = r.dot(y)
-            Ap = A.dot(p)
+            Ap = A(p)
             alpha = ry / (p.dot(Ap))
             x = x + alpha * p
             r = r + alpha * Ap
@@ -349,14 +361,10 @@ class linsys_solver(object):
             beta = ry_new / ry
             p = -y + beta * p
 
-            # Check if residual is less than tolerance
-            norm_r = np.linalg.norm(r)
-            if norm_r < tol:
-                #  print("cg iter = %i" % k)
-                return x
+            k = k + 1  # Increase iteration
 
+        CG_ITERS.append(k)
 
-        # print("CG did not converge within %i iterations, residual %.2e > tolerance %.2e\n" % (max_iters, norm_r, tol))
         return x
 
     def solve(self, rhs, x, iter_idx):
@@ -489,8 +497,8 @@ class OSQP(object):
                 E_temp = spspa.diags(s_temp[self.work.data.n:])
 
             # Scale data in place
-            P = D_temp.dot(P.dot(D_temp)).tocsc()
-            A = E_temp.dot(A.dot(D_temp)).tocsc()
+            P = D_temp.dot(P.dot(D_temp))
+            A = E_temp.dot(A.dot(D_temp))
             q = D_temp.dot(q)
             l = E_temp.dot(l)
             u = E_temp.dot(u)
@@ -531,6 +539,8 @@ class OSQP(object):
             print("Final cost scaling = %.10f" % c)
 
 
+        P = P.tocsc()
+        A = A.tocsc()
         # Assign scaled problem
         self.work.data = problem((n, m), P.data, P.indices, P.indptr, q,
                                  A.data, A.indices, A.indptr, l, u)
@@ -1152,6 +1162,14 @@ class OSQP(object):
         print("optimal rho estimate: %.2es" %
                 (self.work.info.rho_estimate))
 
+        print("Average CG iters:", np.mean(CG_ITERS))
+        print("Total CG iters:", np.sum(CG_ITERS))
+        import matplotlib.pyplot as plt
+        plt.plot(CG_ITERS, linestyle='None', marker='o')
+        plt.ylabel('# CG iterations')
+        plt.xlabel('ADMM iteration')
+        plt.show()
+
         print("")  # Print last space
 
     def store_solution(self):
@@ -1591,8 +1609,14 @@ class OSQP(object):
         self.work.rho_vec[eq_ind] = RHO_EQ_OVER_RHO_INEQ * self.work.settings.rho
         self.work.rho_inv_vec = np.reciprocal(self.work.rho_vec)
 
-        # Factorize KKT
-        self.work.linsys_solver = linsys_solver(self.work)
+        if self.work.settings.linsys_solver == INDIRECT_SOLVER:
+            # Update rho & recalculate preconditioner
+            self.work.linsys_solver.rho_mat = spspa.diags(self.work.rho_vec)
+            self.work.linsys_solver.compute_preconditioner()
+        else:
+            # Factorize KKT
+            self.work.linsys_solver = linsys_solver(self.work)
+
 
     def update_alpha(self, alpha_new):
         """

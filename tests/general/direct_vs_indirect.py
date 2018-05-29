@@ -6,8 +6,8 @@ import numpy as np
 
 sp.random.seed(6)
 
-n = 200
-m = 300
+n = 2000
+m = 3000
 
 # Add constraints
 A = sparse.random(m, n, density=0.4, format='csc')
@@ -21,6 +21,7 @@ q = sp.randn(n)
 
 osqp_opts = {'adaptive_rho_interval': 100,  # to make C code not depend on timing
              'check_termination': 1,  # Check termination every iteration
+             'linsys_solver': 'mkl pardiso'
              }
 
 
