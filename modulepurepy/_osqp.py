@@ -54,6 +54,7 @@ class workspace(object):
     data                   - scaled QP problem
     info                   - solver information
     linsys_solver          - structure for linear system solution
+    acceleration           - structure for the acceleration
     scaling                - scaling matrices
     settings               - settings structure
     solution               - solution structure
@@ -169,6 +170,7 @@ class settings(object):
         self.adaptive_rho_interval = kwargs.pop('adaptive_rho_interval', 200)
         self.adaptive_rho_tolerance = kwargs.pop('adaptive_rho_tolerance', 5)
         self.adaptive_rho_fraction = kwargs.pop('adaptive_rho_fraction', 0.7)
+        self.acceleration_steps = kwargs.pop('acceleration_steps', 5)
 
 
 class scaling(object):
@@ -301,6 +303,48 @@ class linsys_solver(object):
         """
         return self.kkt_factor.solve(rhs)
         #  return sp.linalg.lu_solve((self.lu, self.piv), rhs)
+
+
+class acceleration(object):
+    """
+    Acceleration struct
+
+    Attributes
+    ----------
+    F        - matrix in R^{n \\times n} # Fix dimensions
+    G        - matrix in R^{m \\times n} # Fix dimensions
+    """
+    def __init__(self, work):
+        n = work.data.n
+        m = work.data.m
+        steps = work.settings.acceleration_steps
+
+        # Add F and G as empty matrices
+        self.F = spspa.csc_matrix((n + m, steps))
+        self.G = spspa.csc_matrix((n + m, steps))
+
+        # Initialize warm start iterate
+        self.u = np.vstack((self.work.x,
+                            self.work.z + self.work.rho_inv_vec * self.work.y))
+
+    def update_data(self, work):
+        """
+        Update acceleration iterate with new data
+        u = [x; z + y/rho]
+        """
+        u_new = np.vstack((self.work.x,
+                           self.work.z + self.work.rho_inv_vec * self.work.y))
+        f_new = u_new - self.u  # Difference of consecutive iterates
+
+        # Delete last element from F and G
+        # TODO: Perform resizing more efficiently
+        self.F = self.F[:, 1:]
+        self.G = self.G[:, 1:]
+
+        # Add elements
+        self.F = spspa.hstack([f_new, F])
+        self.G = spspa.hstack([u_new, G])
+
 
 
 class results(object):
@@ -688,6 +732,30 @@ class OSQP(object):
                 self.work.z)
         self.work.y += self.work.delta_y
 
+    def accelerate(self):
+        """
+        Perform acceleration
+        """
+        print("Accelerating...")
+        import cvxpy as cvx
+        a = cvx.Variable()
+        constraints = [cvx.sum(a) == 1, a >= 0]
+        objective = cvx.norm(self.work.acceleration.F * a)
+        problem = cvx.Problem(cvx.Minimize(objective), constraints)
+        problem.solve()
+
+        u = self.work.acceleration.G * a.value
+        print("u = ", u)
+
+        print("Updating work variables...")
+        x = u[:self.work.data.n]
+        v = u[self.work.data.n:]
+        z = self.project(v)
+        y = self.work.rho_vec * (v - z)
+        self.work.x = x
+        self.work.z = z
+        self.work.y = y
+
     def compute_obj_val(self, x):
         # Compute quadratic objective value for the given x
         obj_val = .5 * np.dot(x, self.work.data.P.dot(x)) + \
@@ -1059,10 +1127,10 @@ class OSQP(object):
         print("status:               %s" % self.work.info.status)
         if self.work.settings.polish and \
                 self.work.info.status_val == OSQP_SOLVED:
-                    if self.work.info.status_polish == 1:
-                        print("solution polish:      successful")
-                    elif self.work.info.status_polish == -1:
-                        print("solution polish:      unsuccessful")
+            if self.work.info.status_polish == 1:
+                print("solution polish:      successful")
+            elif self.work.info.status_polish == -1:
+                print("solution polish:      unsuccessful")
         print("number of iterations: %d" % self.work.info.iter)
         if self.work.info.status_val == OSQP_SOLVED or \
                 self.work.info.status_val == OSQP_SOLVED_INACCURATE:
@@ -1150,6 +1218,9 @@ class OSQP(object):
         # Factorize KKT
         self.work.linsys_solver = linsys_solver(self.work)
 
+        # Initialize acceleration
+        self.work.acceleration = acceleration(self.work)
+
         # Solution
         self.work.solution = solution()
 
@@ -1198,6 +1269,11 @@ class OSQP(object):
 
             # Third step: update y
             self.update_y()
+
+            # Accelerate
+            # Update data
+            self.work.acceleration.update_data()
+            self.accelerate()
 
             if self.work.settings.check_termination:
                 # Update info
@@ -1253,7 +1329,7 @@ class OSQP(object):
         # Solution polish
         if self.work.settings.polish and \
                 self.work.info.status_val == OSQP_SOLVED:
-                    ls = self.polish()
+            ls = self.polish()
         else:
             ls = None
 
