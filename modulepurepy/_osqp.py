@@ -170,7 +170,8 @@ class settings(object):
         self.adaptive_rho_interval = kwargs.pop('adaptive_rho_interval', 200)
         self.adaptive_rho_tolerance = kwargs.pop('adaptive_rho_tolerance', 5)
         self.adaptive_rho_fraction = kwargs.pop('adaptive_rho_fraction', 0.7)
-        self.acceleration_steps = kwargs.pop('acceleration_steps', 5)
+        self.acceleration = kwargs.pop('acceleration', False)
+        self.acceleration_steps = kwargs.pop('acceleration_steps', 10)
 
 
 class scaling(object):
@@ -313,6 +314,7 @@ class acceleration(object):
     ----------
     F        - matrix in R^{n \\times n} # Fix dimensions
     G        - matrix in R^{m \\times n} # Fix dimensions
+    u        - current terate
     """
     def __init__(self, work):
         n = work.data.n
@@ -320,30 +322,36 @@ class acceleration(object):
         steps = work.settings.acceleration_steps
 
         # Add F and G as empty matrices
-        self.F = spspa.csc_matrix((n + m, steps))
-        self.G = spspa.csc_matrix((n + m, steps))
+        self.F = spspa.csc_matrix((n + m, 0))
+        self.G = spspa.csc_matrix((n + m, 0))
 
         # Initialize warm start iterate
-        self.u = np.vstack((self.work.x,
-                            self.work.z + self.work.rho_inv_vec * self.work.y))
+        self.u = np.concatenate([work.x,
+                                 work.z + work.rho_inv_vec * work.y])
 
-    def update_data(self, work):
+    def update_data(self, work, iter):
         """
         Update acceleration iterate with new data
         u = [x; z + y/rho]
         """
-        u_new = np.vstack((self.work.x,
-                           self.work.z + self.work.rho_inv_vec * self.work.y))
+        u_new = np.concatenate([work.x,
+                                work.z + work.rho_inv_vec * work.y])
         f_new = u_new - self.u  # Difference of consecutive iterates
 
         # Delete last element from F and G
-        # TODO: Perform resizing more efficiently
-        self.F = self.F[:, 1:]
-        self.G = self.G[:, 1:]
+        if iter > work.settings.acceleration_steps:
+            # TODO: Perform resizing more efficiently
+            self.F = self.F[:, 1:]
+            self.G = self.G[:, 1:]
 
         # Add elements
-        self.F = spspa.hstack([f_new, F])
-        self.G = spspa.hstack([u_new, G])
+        self.F = spspa.hstack([self.F, spspa.csc_matrix(f_new).T]).tocsc()
+        self.G = spspa.hstack([self.G, spspa.csc_matrix(u_new).T]).tocsc()
+
+        #  print(self.F.shape)
+        #  print(self.G.shape)
+        #  print(self.F)
+        #  print(self.G)
 
 
 
@@ -480,7 +488,6 @@ class OSQP(object):
             inf_norm_q = np.linalg.norm(q, np.inf)
             inf_norm_q = self._limit_scaling(inf_norm_q)
             scale_cost = np.maximum(inf_norm_q, norm_P_cols)
-            #  import ipdb; ipdb.set_trace()
             scale_cost = self._limit_scaling(scale_cost)
             scale_cost = 1. / scale_cost
 
@@ -507,7 +514,6 @@ class OSQP(object):
         if self.work.settings.verbose:
             print("Final cost scaling = %.10f" % c)
 
-        # import ipdb; ipdb.set_trace()
 
         # Assign scaled problem
         self.work.data = problem((n, m), P.data, P.indices, P.indptr, q,
@@ -736,25 +742,24 @@ class OSQP(object):
         """
         Perform acceleration
         """
-        print("Accelerating...")
+        #  print("Accelerating...")
         import cvxpy as cvx
-        a = cvx.Variable()
-        constraints = [cvx.sum(a) == 1, a >= 0]
-        objective = cvx.norm(self.work.acceleration.F * a)
+        alpha_var = cvx.Variable(self.work.settings.acceleration_steps)
+        constraints = [cvx.sum(alpha_var) == 1]
+        FtF = self.work.acceleration.F.T.dot(self.work.acceleration.F)
+        objective = cvx.quad_form(alpha_var, FtF) # + 1e-06 * cvx.sum_squares(alpha_var)
         problem = cvx.Problem(cvx.Minimize(objective), constraints)
-        problem.solve()
+        problem.solve(solver=cvx.MOSEK, verbose=False)
 
-        u = self.work.acceleration.G * a.value
-        print("u = ", u)
+        self.u = self.work.acceleration.G.dot(alpha_var.value)
 
-        print("Updating work variables...")
-        x = u[:self.work.data.n]
-        v = u[self.work.data.n:]
-        z = self.project(v)
-        y = self.work.rho_vec * (v - z)
-        self.work.x = x
-        self.work.z = z
-        self.work.y = y
+        #  print("norm(a) = ", np.linalg.norm(alpha_var.value))
+        #  print(alpha_var.value)
+        #  print("Updating work variables...")
+        self.work.x = np.copy(self.u[:self.work.data.n])
+        v = np.copy(self.u[self.work.data.n:])
+        self.work.z = self.project(v)
+        self.work.y = self.work.rho_vec * (v - self.work.z)
 
     def compute_obj_val(self, x):
         # Compute quadratic objective value for the given x
@@ -1219,7 +1224,8 @@ class OSQP(object):
         self.work.linsys_solver = linsys_solver(self.work)
 
         # Initialize acceleration
-        self.work.acceleration = acceleration(self.work)
+        if self.work.settings.acceleration:
+            self.work.acceleration = acceleration(self.work)
 
         # Solution
         self.work.solution = solution()
@@ -1271,9 +1277,13 @@ class OSQP(object):
             self.update_y()
 
             # Accelerate
-            # Update data
-            self.work.acceleration.update_data()
-            self.accelerate()
+            if self.work.settings.acceleration:
+                # Update data
+                self.work.acceleration.update_data(self.work, iter)
+                if iter >= self.work.settings.acceleration_steps:
+                    self.accelerate()
+                #  else:
+                #      print("Not accelerating yet!")
 
             if self.work.settings.check_termination:
                 # Update info
