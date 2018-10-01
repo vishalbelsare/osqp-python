@@ -1,5 +1,5 @@
 """
-Python interface module for OSQP solver v0.3.0
+Python interface module for OSQP solver v0.4.1
 """
 from __future__ import print_function
 from builtins import object
@@ -191,13 +191,31 @@ class OSQP(object):
         # Update matrix A
         if Ax is not None:
             if Ax_idx is not None and len(Ax) != len(Ax_idx):
-                    raise ValueError("Ax and Ax_idx must have same length")
+                raise ValueError("Ax and Ax_idx must have same length")
             if Px is None:
                 self._model.update_A(Ax, Ax_idx, len(Ax))
 
         # Update matrices P and A
         if Px is not None and Ax is not None:
             self._model.update_P_A(Px, Px_idx, len(Px), Ax, Ax_idx, len(Ax))
+
+        if q is None and \
+           l is None and \
+           u is None and \
+           Px is None and \
+           Ax is None:
+            P = kwargs.pop('P', None)
+            A = kwargs.pop('A', None)
+            if Px_idx is not None:
+                raise ValueError("Vector Px has not been specified!")
+            elif P is not None:
+                raise ValueError("Matrix P cannot be updated this way!")
+            elif Ax_idx is not None:
+                raise ValueError("Vector Ax has not been specified!")
+            elif A is not None:
+                raise ValueError("Matrix A cannot be updated this way!")
+            else:
+                raise ValueError("No updatable data has been specified!")
 
     def update_settings(self, **kwargs):
         """
@@ -288,7 +306,7 @@ class OSQP(object):
            scaled_termination is None and \
            check_termination is None and \
            warm_start is None:
-            ValueError("No updatable settings has been specified!")
+            raise ValueError("No updatable settings has been specified!")
 
     def solve(self):
         """
@@ -373,18 +391,18 @@ class OSQP(object):
             raise TypeError("Setting linsys_solver " +
                             "is required to be a string.")
         linsys_solver_str = linsys_solver_str.lower()
-        if linsys_solver_str == 'suitesparse ldl':
+        if linsys_solver_str == 'qdldl':
             settings['linsys_solver'] = \
-                    self._model.constant('SUITESPARSE_LDL_SOLVER')
+                    self._model.constant('QDLDL_SOLVER')
         elif linsys_solver_str == 'mkl pardiso':
             settings['linsys_solver'] = self._model.constant('MKL_PARDISO_SOLVER')
-        # Default solver: Suitesparse LDL
+        # Default solver: QDLDL
         elif linsys_solver_str == '':
             settings['linsys_solver'] = \
-                    self._model.constant('SUITESPARSE_LDL_SOLVER')
-        else:   # default solver: Suitesparse LDL
+                    self._model.constant('QDLDL_SOLVER')
+        else:   # default solver: QDLDL
             warn("Linear system solver not recognized. " + 
-                 "Using default solver Suitesparse LDL.")
+                 "Using default solver QDLDL.")
             settings['linsys_solver'] = \
-                self._model.constant('SUITESPARSE_LDL_SOLVER')
+                self._model.constant('QDLDL_SOLVER')
 

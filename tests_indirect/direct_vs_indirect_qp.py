@@ -3,9 +3,8 @@ import osqppurepy as osqppurepy
 import scipy.sparse as sparse
 import scipy as sp
 import numpy as np
-#  import mathprogbasepy as mpbpy
 
-sp.random.seed(6)
+sp.random.seed(1)
 
 n = 200
 m = 300
@@ -20,16 +19,10 @@ P = random_scaling * sparse.random(n, n, density=0.4)
 P = P.dot(P.T).tocsc()
 q = sp.randn(n)
 
-osqp_opts = { # 'rho': 0.001,
-             'adaptive_rho_interval': 100,
-             #  'polish': True,
-             'check_termination': 1,
-             'scaling': 15}
+osqp_opts = {'adaptive_rho_interval': 50,  # to make C code not depend on timing
+             'check_termination': 1,  # Check termination every iteration
+             }
 
-
-#  # GUROBI
-#  qp = mpbpy.QuadprogProblem(P, q, A, l, u)
-#  res_gurobi = qp.solve(solver=mpbpy.GUROBI, verbose=True)
 
 # OSQP
 model = osqp.OSQP()

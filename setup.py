@@ -1,26 +1,38 @@
 from __future__ import print_function
+import distutils.sysconfig as sysconfig
 from setuptools import setup, Extension
 from setuptools.command.build_ext import build_ext
 from shutil import copyfile, copy
-from numpy import get_include
 from glob import glob
 import shutil as sh
 from subprocess import call, check_output
-from platform import system, architecture
+from platform import system
 import os
 import sys
 
 
 # Add parameters to cmake_args and define_macros
 cmake_args = ["-DUNITTESTS=OFF"]
+cmake_build_flags = []
 define_macros = []
+lib_subdir = []
 
 # Check if windows linux or mac to pass flag
 if system() == 'Windows':
-    cmake_args += ['-G', 'MinGW Makefiles']
+    if sys.version_info.major == 3:
+        cmake_args += ['-G', 'Visual Studio 14 2015']
+    else:
+        cmake_args += ['-G', 'Visual Studio 9 2008']
+    # Differentiate between 32-bit and 64-bit
+    if sys.maxsize // 2 ** 32 > 0:
+        cmake_args[-1] += ' Win64'
+    cmake_build_flags += ['--config', 'Release']
+    lib_name = 'osqp.lib'
+    lib_subdir = ['Release']
 
 else:  # Linux or Mac
     cmake_args += ['-G', 'Unix Makefiles']
+    lib_name = 'libosqp.a'
 
 # Pass Python option to CMake and Python interface compilation
 cmake_args += ['-DPYTHON=ON']
@@ -30,22 +42,23 @@ define_macros += [('PYTHON', None)]
 
 # Pass python version to cmake
 py_version = "%i.%i" % sys.version_info[:2]
-cmake_args += ['-DPYTHON_VER_NUM=%s' % py_version]
+cmake_args += ['-DPYTHON_INCLUDE_DIRS=%s' % sysconfig.get_python_inc()]
 
 
-# Define osqp and suitesparse directories
+# Define osqp and qdldl directories
 current_dir = os.getcwd()
 osqp_dir = os.path.join('osqp_sources')
 osqp_build_dir = os.path.join(osqp_dir, 'build')
-suitesparse_dir = os.path.join(osqp_dir, 'lin_sys', 'direct', 'suitesparse')
+qdldl_dir = os.path.join(osqp_dir, 'lin_sys', 'direct', 'qdldl')
 
 # Interface files
 include_dirs = [
-    get_include(),                                      # Numpy directories
-    os.path.join(osqp_dir, 'include'),                  # osqp.h
-    # suitesparse_ldl headers to extract workspace for codegen
-    os.path.join(suitesparse_dir),
-    os.path.join('extension', 'include')]               # auxiliary .h files
+    os.path.join(osqp_dir, 'include'),      # osqp.h
+    os.path.join(qdldl_dir),                # qdldl_interface header to
+                                            # extract workspace for codegen
+    os.path.join(qdldl_dir, "qdldl_sources",
+                            "include"),     # qdldl includes for file types
+    os.path.join('extension', 'include')]   # auxiliary .h files
 
 sources_files = glob(os.path.join('extension', 'src', '*.c'))
 
@@ -67,10 +80,7 @@ if system() == 'Windows' and sys.version_info[0] == 3:
     libraries += ['legacy_stdio_definitions']
 
 # Add OSQP compiled library
-lib_ext = '.a'
-extra_objects = [os.path.join('extension', 'src',
-                 'libosqpstatic%s' % lib_ext)]
-
+extra_objects = [os.path.join('extension', 'src', lib_name)]
 
 '''
 Copy C sources for code generation
@@ -86,13 +96,12 @@ os.makedirs(osqp_codegen_sources_dir)
 cfiles = [os.path.join(osqp_dir, 'src', f)
           for f in os.listdir(os.path.join(osqp_dir, 'src'))
           if f.endswith('.c') and f not in ('cs.c', 'ctrlc.c', 'polish.c',
-          'lin_sys.c')]
-cfiles += [os.path.join(suitesparse_dir, f)
-           for f in os.listdir(suitesparse_dir)
-           if f.endswith('.c') and f != 'SuiteSparse_config.c']
-cfiles += [os.path.join(suitesparse_dir, 'ldl', 'src', f)
-           for f in os.listdir(os.path.join(suitesparse_dir, 'ldl', 'src'))
+                                            'lin_sys.c')]
+cfiles += [os.path.join(qdldl_dir, f)
+           for f in os.listdir(qdldl_dir)
            if f.endswith('.c')]
+cfiles += [os.path.join(qdldl_dir, 'qdldl_sources', 'src', f)
+           for f in os.listdir(os.path.join(qdldl_dir, 'qdldl_sources', 'src'))]
 osqp_codegen_sources_c_dir = os.path.join(osqp_codegen_sources_dir, 'src')
 if os.path.exists(osqp_codegen_sources_c_dir):  # Create destination directory
     sh.rmtree(osqp_codegen_sources_c_dir)
@@ -103,14 +112,14 @@ for f in cfiles:  # Copy C files
 # List with OSQP H files
 hfiles = [os.path.join(osqp_dir, 'include', f)
           for f in os.listdir(os.path.join(osqp_dir, 'include'))
-          if f.endswith('.h') and f not in ('osqp_configure.h', 'cs.h',
-                                            'ctrlc.h', 'polish.h',
+          if f.endswith('.h') and f not in ('qdldl_types.h', 'osqp_configure.h',
+                                            'cs.h', 'ctrlc.h', 'polish.h',
                                             'lin_sys.h')]
-hfiles += [os.path.join(suitesparse_dir, f)
-           for f in os.listdir(suitesparse_dir)
-           if f.endswith('.h') and f != 'SuiteSparse_config.h']
-hfiles += [os.path.join(suitesparse_dir, 'ldl', 'include', f)
-           for f in os.listdir(os.path.join(suitesparse_dir, 'ldl', 'include'))
+hfiles += [os.path.join(qdldl_dir, f)
+           for f in os.listdir(qdldl_dir)
+           if f.endswith('.h')]
+hfiles += [os.path.join(qdldl_dir, 'qdldl_sources', 'include', f)
+           for f in os.listdir(os.path.join(qdldl_dir, 'qdldl_sources', 'include'))
            if f.endswith('.h')]
 osqp_codegen_sources_h_dir = os.path.join(osqp_codegen_sources_dir, 'include')
 if os.path.exists(osqp_codegen_sources_h_dir):  # Create destination directory
@@ -120,7 +129,8 @@ for f in hfiles:  # Copy header files
     copy(f, osqp_codegen_sources_h_dir)
 
 # List with OSQP configure files
-configure_files = [os.path.join(osqp_dir, 'configure', 'osqp_configure.h.in')]
+configure_files = [os.path.join(osqp_dir, 'configure', 'osqp_configure.h.in'),
+                   os.path.join(qdldl_dir, 'qdldl_sources', 'configure', 'qdldl_types.h.in')]
 osqp_codegen_sources_configure_dir = os.path.join(osqp_codegen_sources_dir, 'configure')
 if os.path.exists(osqp_codegen_sources_configure_dir):  # Create destination directory
     sh.rmtree(osqp_codegen_sources_configure_dir)
@@ -128,13 +138,15 @@ os.makedirs(osqp_codegen_sources_configure_dir)
 for f in configure_files:  # Copy configure files
     copy(f, osqp_codegen_sources_configure_dir)
 
-# List of files to generate  (No longer needed. It is in MANIFEST.in)
-#  files_to_generate = glob(os.path.join('module', 'codegen',
-                                      #  'files_to_generate', '*.*'))
-
-
 
 class build_ext_osqp(build_ext):
+    def finalize_options(self):
+        build_ext.finalize_options(self)
+        # Prevent numpy from thinking it is still in its setup process:
+        __builtins__.__NUMPY_SETUP__ = False
+        import numpy
+        self.include_dirs.append(numpy.get_include())
+
     def build_extensions(self):
         # Compile OSQP using CMake
 
@@ -151,14 +163,15 @@ class build_ext_osqp(build_ext):
 
         # Compile static library with CMake
         call(['cmake'] + cmake_args + ['..'])
-        call(['cmake', '--build', '.', '--target', 'osqpstatic'])
+        call(['cmake', '--build', '.', '--target', 'osqpstatic'] +
+             cmake_build_flags)
 
         # Change directory back to the python interface
         os.chdir(current_dir)
 
         # Copy static library to src folder
-        lib_name = 'libosqpstatic%s' % lib_ext
-        lib_origin = os.path.join(osqp_build_dir, 'out', lib_name)
+        lib_origin = [osqp_build_dir, 'out'] + lib_subdir + [lib_name]
+        lib_origin = os.path.join(*lib_origin)
         copyfile(lib_origin, os.path.join('extension', 'src', lib_name))
 
         # Run extension
@@ -176,15 +189,18 @@ _osqp = Extension('osqp._osqp',
 
 packages = ['osqp',
             'osqp.codegen',
+            'osqp.tests',
             'osqppurepy']
+
 
 # Read README.rst file
 def readme():
     with open('README.rst') as f:
         return f.read()
 
+
 setup(name='osqp',
-      version='0.3.0',
+      version='0.4.1',
       author='Bartolomeo Stellato, Goran Banjac',
       author_email='bartolomeo.stellato@gmail.com',
       description='OSQP: The Operator Splitting QP Solver',
@@ -192,9 +208,10 @@ setup(name='osqp',
       package_dir={'osqp': 'module',
                    'osqppurepy': 'modulepurepy'},
       include_package_data=True,  # Include package data from MANIFEST.in
+      setup_requires=["numpy >= 1.7"],
       install_requires=["numpy >= 1.7", "scipy >= 0.13.2", "future"],
       license='Apache 2.0',
-      url="http://osqp.readthedocs.io/",
+      url="https://osqp.org/",
       cmdclass={'build_ext': build_ext_osqp},
       packages=packages,
       ext_modules=[_osqp])

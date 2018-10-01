@@ -19,6 +19,7 @@ OSQP_SOLVED = 1
 OSQP_MAX_ITER_REACHED = -2
 OSQP_PRIMAL_INFEASIBLE = -3
 OSQP_DUAL_INFEASIBLE = -4
+OSQP_NON_CVX = -7
 OSQP_UNSOLVED = -10
 
 # Parameter bounds
@@ -35,10 +36,10 @@ PRINT_INTERVAL = 200
 OSQP_INFTY = 1e+20
 
 # OSQP Nan
-OSQP_NAN = 1e+20  # Just as placeholder. Not real value
+OSQP_NAN = np.nan
 
 # Linear system solver options
-SUITESPARSE_LDL_SOLVER = 0
+QDLDL_SOLVER = 0
 INDIRECT_SOLVER = 2
 
 # Scaling
@@ -48,6 +49,7 @@ MAX_SCALING = 1e+04
 # CG tolerances
 CG_RATE = 1.3
 CG_ITERS = []
+CG_TOL = []
 
 class workspace(object):
     """
@@ -160,8 +162,7 @@ class settings(object):
         self.eps_prim_inf = kwargs.pop('eps_prim_inf', 1e-4)
         self.eps_dual_inf = kwargs.pop('eps_dual_inf', 1e-4)
         self.alpha = kwargs.pop('alpha', 1.6)
-        self.linsys_solver = kwargs.pop('linsys_solver',
-                                        SUITESPARSE_LDL_SOLVER)
+        self.linsys_solver = kwargs.pop('linsys_solver', QDLDL_SOLVER)
         self.delta = kwargs.pop('delta', 1e-6)
         self.verbose = kwargs.pop('verbose', True)
         self.scaled_termination = kwargs.pop('scaled_termination', False)
@@ -337,18 +338,19 @@ class linsys_solver(object):
         if max_iters == 0:
             max_iters = x.shape[0]
 
-        #  max_iters = 1
-
-
         # Initialize algorithm
         r = A(x) - b
         y = invM.dot(r)  # M * y = r
         p = -y
 
         global CG_TOL, CG_ITERS
+
         k = 0
-        if iter_idx == 1: CG_TOL = 0.1*np.linalg.norm(r)
-        while not np.linalg.norm(r) < 1/(iter_idx)**CG_RATE * CG_TOL \
+        if iter_idx == 1:
+            tol = 0.1*np.linalg.norm(r)
+        else:
+            tol = 1/(iter_idx)**CG_RATE * CG_TOL[0]
+        while not np.linalg.norm(r) < tol \
             and k < max_iters:
             # Perform CG iterations
             ry = r.dot(y)
@@ -364,6 +366,7 @@ class linsys_solver(object):
             k = k + 1  # Increase iteration
 
         CG_ITERS.append(k)
+        CG_TOL.append(tol)
 
         return x
 
@@ -389,11 +392,10 @@ class results(object):
     y           - dual solution
     info        - info structure
     """
-    def __init__(self, solution, info, linesearch):
+    def __init__(self, solution, info):
         self.x = solution.x
         self.y = solution.y
         self.info = info
-        self.linesearch = linesearch
 
 
 class OSQP(object):
@@ -403,7 +405,7 @@ class OSQP(object):
     work    - workspace
     """
     def __init__(self):
-        self._version = "0.3.0"
+        self._version = "0.4.1"
 
     @property
     def version(self):
@@ -535,10 +537,6 @@ class OSQP(object):
             # Update scaling
             c = c_temp * c
 
-        if self.work.settings.verbose:
-            print("Final cost scaling = %.10f" % c)
-
-
         P = P.tocsc()
         A = A.tocsc()
         # Assign scaled problem
@@ -631,7 +629,7 @@ class OSQP(object):
               self.version)
         print("                 Pure Python Implementation")
         print("        (c) Bartolomeo Stellato, Goran Banjac")
-        print("      University of Oxford  -  Stanford University 2017")
+        print("      University of Oxford  -  Stanford University 2018")
         print("--------------------------------------------------------------")
 
         print("problem:  variables n = %d, constraints m = %d" %
@@ -639,11 +637,11 @@ class OSQP(object):
         nnz = self.work.data.P.nnz + self.work.data.A.nnz
         print("          nnz(P) + nnz(A) = %i" % nnz)
         print("settings: ", end='')
-        if settings.linsys_solver == SUITESPARSE_LDL_SOLVER:
-            print("linear system solver = suitesparse ldl\n          ", end='')
+        if settings.linsys_solver == QDLDL_SOLVER:
+            print("linear system solver = qdldl\n          ", end='')
         else:
             print("linear system solver = indirect cg\n ", end='')
-        print("eps_abs = %.2e, eps_rel = %.2e," %
+        print("          eps_abs = %.2e, eps_rel = %.2e," %
               (settings.eps_abs, settings.eps_rel))
         print("          eps_prim_inf = %.2e, eps_dual_inf = %.2e," %
               (settings.eps_prim_inf, settings.eps_dual_inf))
@@ -697,6 +695,8 @@ class OSQP(object):
             self.work.info.status = "dual infeasible inaccurate"
         elif status == OSQP_MAX_ITER_REACHED:
             self.work.info.status = "maximum iterations reached"
+        elif status == OSQP_NON_CVX:
+            self.work.info.status = "problem non convex"
 
     def cold_start(self):
         """
@@ -1091,6 +1091,12 @@ class OSQP(object):
             eps_prim_inf *= 10
             eps_dual_inf *= 10
 
+        # If residuals are too large, the problem is probably non convex
+        if (self.work.info.pri_res > 2*OSQP_INFTY) or (self.work.info.dua_res > 2*OSQP_INFTY):
+            self.work.info.status_val = OSQP_NON_CVX
+            self.work.info.obj_val = OSQP_NAN
+            return 1
+
         if self.work.data.m == 0:  # No constraints -> always  primal feasible
             pri_check = 1
         else:
@@ -1162,12 +1168,23 @@ class OSQP(object):
         print("optimal rho estimate: %.2es" %
                 (self.work.info.rho_estimate))
 
-        print("Average CG iters:", np.mean(CG_ITERS))
-        print("Total CG iters:", np.sum(CG_ITERS))
+        print("Avg CG its/ADMM it:  ", np.mean(CG_ITERS))
+        print("Total CG iters:      ", np.sum(CG_ITERS))
+        #  Print CG iters
         import matplotlib.pyplot as plt
-        plt.plot(CG_ITERS, linestyle='None', marker='o')
-        plt.ylabel('# CG iterations')
-        plt.xlabel('ADMM iteration')
+
+
+        fig, axs = plt.subplots(1, 2)
+        axs[0].plot(CG_ITERS)
+        axs[0].set_ylabel('# CG iterations')
+        axs[0].set_xlabel('ADMM iteration')
+        axs[1].plot(CG_TOL)
+        axs[1].set_ylabel('CG tolerance')
+        axs[1].set_xlabel('ADMM iteration')
+        axs[1].set_yscale('log')
+        #  plt.plot(CG_ITERS, linestyle='None', marker='o')
+        #  plt.ylabel('# CG iterations')
+        #  plt.xlabel('ADMM iteration')
         plt.show()
 
         print("")  # Print last space
@@ -1353,13 +1370,6 @@ class OSQP(object):
         # Update rho estimate
         self.work.info.rho_estimate = self.compute_rho_estimate()
 
-        # Solution polish
-        if self.work.settings.polish and \
-                self.work.info.status_val == OSQP_SOLVED:
-                    ls = self.polish()
-        else:
-            ls = None
-
         # Update total times
         if self.work.first_run:
             self.work.info.run_time = self.work.info.setup_time + \
@@ -1380,7 +1390,7 @@ class OSQP(object):
             self.work.first_run = 0
 
         # Store results structure
-        return results(self.work.solution, self.work.info, ls)
+        return results(self.work.solution, self.work.info)
 
     #
     #   Auxiliary API Functions
@@ -1795,8 +1805,6 @@ class OSQP(object):
                       (self.work.info.dua_res < 1e-10) or \
                       (self.work.pol.dua_res < self.work.info.dua_res) and \
                       (self.work.info.pri_res < 1e-10)
-
-        ls = linesearch()
 
         if pol_success:
             # Update solver information
