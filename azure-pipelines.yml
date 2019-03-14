@@ -1,3 +1,8 @@
+resources:
+  - repository: self
+    checkoutOptions:
+      submodules: true
+
 jobs:
 
 - job: 'test_linux'
