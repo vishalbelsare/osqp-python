@@ -1,3 +1,6 @@
+- checkout: self
+  submodules: recursive
+
 jobs:
 
 - job: 'test_linux'
@@ -30,7 +33,7 @@ jobs:
       displayName: 'Add conda to PATH'
 
     - bash: sudo chown -R $USER /usr/share/miniconda
-      displayName: Take ownership of conda installation
+      displayName: 'Take ownership of conda installation'
 
     - script: |
         conda config --set always_yes yes --set changeps1 no --set auto_update_conda no
