@@ -1,6 +1,6 @@
 jobs:
 
-- job: 'Test_Linux'
+- job: 'test_linux'
   # strategy:
   #   matrix:
   #     linux:
