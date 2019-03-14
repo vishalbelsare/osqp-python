@@ -53,7 +53,7 @@ jobs:
     maxParallel: 10
 
   pool:
-  vmImage: $(imageName)
+    vmImage: $(imageName)
 
   steps:
     # Add anaconda to path
