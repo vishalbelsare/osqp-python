@@ -2,41 +2,82 @@ resources:
   repositories:
   - repository: self
     checkoutOptions:
-      submodules: true
+      submodules: recursive
 
 jobs:
 
-- job: 'test_linux'
-  # strategy:
-  #   matrix:
-  #     linux:
-  #       imageName: 'ubuntu-16.04'
-  #     mac:
-  #       imageName: 'macos-10.13'
-  #     windows:
-  #       imageName: 'vs2017-win2016'
-
-  pool:
-    vmImage: 'ubuntu-16.04'
-
+- job: 'test'
   strategy:
     matrix:
-      Python27:
+      # Linux
+      linux_python_27:
         PYTHON_VERSION: '2.7'
-      Python35:
+        imageName: 'ubuntu-16.04'
+      linux_python_35:
         PYTHON_VERSION: '3.5'
-      Python36:
+        imageName: 'ubuntu-16.04'
+      linux_python_36:
         PYTHON_VERSION: '3.6'
-      Python37:
+        imageName: 'ubuntu-16.04'
+      linux_python_37:
         PYTHON_VERSION: '3.7'
-    maxParallel: 4
+        imageName: 'ubuntu-16.04'
+      # Mac
+      mac_python_27:
+        PYTHON_VERSION: '2.7'
+        imageName: 'macos-10.13'
+      mac_python_35:
+        PYTHON_VERSION: '3.5'
+        imageName: 'macos-10.13'
+      mac_python_36:
+        PYTHON_VERSION: '3.6'
+        imageName: 'macos-10.13'
+      mac_python_37:
+        PYTHON_VERSION: '3.7'
+        imageName: 'macos-10.13'
+
+      # Windows
+      windows_python_27:
+        PYTHON_VERSION: '2.7'
+        imageName: 'vs2017-win2016'
+      windows_python_35:
+        PYTHON_VERSION: '3.5'
+        imageName: 'vs2017-win2016'
+      windows_python_36:
+        PYTHON_VERSION: '3.6'
+        imageName: 'vs2017-win2016'
+      windows_python_37:
+        PYTHON_VERSION: '3.7'
+        imageName: 'vs2017-win2016'
+
+    maxParallel: 10
+
+  pool:
+  vmImage: $(imageName)
 
   steps:
+    # Add anaconda to path
     - bash: echo "##vso[task.prependpath]/usr/share/miniconda/bin"
+      condition: eq( variables['Agent.OS'], 'Linux' )
       displayName: 'Add conda to PATH'
 
+    - bash: echo "##vso[task.prependpath]$CONDA/bin"
+      condition: eq( variables['Agent.OS'], 'Darwin' )
+      displayName: 'Add conda to PATH'
+
+    - powershell: Write-Host "##vso[task.prependpath]$env:CONDA\Scripts"
+      condition: eq( variables['Agent.OS'], 'Windows_NT' )
+      displayName: 'Add conda to PATH'
+
+
+    # Take ownership of conda installation directory
     - bash: sudo chown -R $USER /usr/share/miniconda
       displayName: 'Take ownership of conda installation'
+      condition: eq( variables['Agent.OS'], 'Linux' )
+
+    - bash: sudo chown -R $USER $CONDA
+      displayName: 'Take ownership of conda installation'
+      condition: eq( variables['Agent.OS'], 'Darwin' )
 
     - script: |
         conda config --set always_yes yes --set changeps1 no --set auto_update_conda no
