@@ -1,4 +1,5 @@
 resources:
+  repositories:
   - repository: self
     checkoutOptions:
       submodules: true
