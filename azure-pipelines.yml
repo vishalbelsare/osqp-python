@@ -31,6 +31,7 @@ jobs:
 
     - script: |
         conda config --set always_yes yes --set changeps1 no --set auto_update_conda no
+        conda install conda conda-verify conda-build
         conda build conda-recipe --python=$PYTHON_VERSION
       displayName: 'Create and test conda recipe'
 
