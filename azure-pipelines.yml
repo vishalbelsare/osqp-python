@@ -29,6 +29,9 @@ jobs:
     - bash: echo "##vso[task.prependpath]/usr/share/miniconda/bin"
       displayName: 'Add conda to PATH'
 
+    - bash: sudo chown -R $USER /usr/share/miniconda
+      displayName: Take ownership of conda installation
+
     - script: |
         conda config --set always_yes yes --set changeps1 no --set auto_update_conda no
         conda install conda conda-verify conda-build
