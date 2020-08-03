@@ -79,8 +79,8 @@ setup(name='PYTHON_EXT_NAME',
       author_email='bartolomeo.stellato@gmail.com',
       description='This is the Python module for embedded OSQP: ' +
                   'Operator Splitting solver for Quadratic Programs.',
-      setup_requires=["numpy >= 1.7"],
-      install_requires=["numpy >= 1.7", "future"],
+      setup_requires=["numpy >= 1.17"],
+      install_requires=["numpy >= 1.17", "future"],
       license='Apache 2.0',
       cmdclass={'build_ext': build_ext_osqp},
       ext_modules=[PYTHON_EXT_NAME])

@@ -214,7 +214,7 @@ setup(name='osqp',
       package_dir={'osqp': 'module',
                    'osqppurepy': 'modulepurepy'},
       include_package_data=True,  # Include package data from MANIFEST.in
-      setup_requires=["numpy >= 1.7"],
+      setup_requires=["numpy >= 1.17"],
       install_requires=requirements,
       license='Apache 2.0',
       url="https://osqp.org/",
