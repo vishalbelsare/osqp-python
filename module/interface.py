@@ -318,7 +318,7 @@ class OSQP(object):
         cg.codegen(work, folder, python_ext_name, project_type,
                    embedded, force_rewrite, float_flag, long_flag)
 
-    def derivative_iterative_refinement(self, rhs, max_iter=20, tol=1e-12):
+    def derivative_iterative_refinement(self, rhs, max_iter=50, tol=1e-12):
         M = self._derivative_cache['M']
 
         # Prefactor
@@ -340,14 +340,25 @@ class OSQP(object):
         return sol
 
     def adjoint_derivative(self, dx=None, dy_u=None, dy_l=None,
-                           P_idx=None, A_idx=None, eps_iter_ref=1e-04):
+                           P_idx=None, A_idx=None, eps_iter_ref=1e-08):
         """
         Compute adjoint derivative after solve.
         """
 
         P = self._derivative_cache['P']
+        P = P + P.T - spa.diags(P.diagonal())
         A = self._derivative_cache['A']
         l, u = self._derivative_cache['l'], self._derivative_cache['u']
+
+        # Extract index finite l and u
+        #  import ipdb; ipdb.set_trace()
+        #  osqp_infty = _osqp.constant('OSQP_INFTY')
+        #  l_finite_idx = l > -osqp_infty
+        #  u_finite_idx = u < osqp_infty
+        #  A_full = A
+        #  l_full = l
+        #  u_full = u
+        #  A_u = Vk
 
         try:
             results = self._derivative_cache['results']
@@ -361,10 +372,24 @@ class OSQP(object):
                              "You cannot take derivatives")
 
         m, n = A.shape
+
         x = results.x
         y = results.y
-        y_u = np.maximum(y, 0)
-        y_l = -np.minimum(y, 0)
+        #  y_u = np.maximum(y, 0)
+        #  y_l = -np.minimum(y, 0)
+        y_u = np.maximum(y, 1e-08)
+        y_l = -np.minimum(y, -1e-08)
+
+        # Debug
+        #  import cvxpy as cp
+        #  q = self._derivative_cache['q']
+        #  x_cp = cp.Variable(n)
+        #  constr = [A @ x_cp <= u, -A @ x_cp <= -l]
+        #  cp.Problem(cp.Minimize(.5 * cp.quad_form(x_cp, P) + q @ x_cp),
+                   #  constr).solve(solver=cp.ECOS)
+        #  x = x_cp.value
+        #  y_u = constr[0].dual_value
+        #  y_l = constr[1].dual_value
 
         if A_idx is None:
             A_idx = A.nonzero()
@@ -381,24 +406,48 @@ class OSQP(object):
         if 'M' not in self._derivative_cache:
             # Multiply second-third row by diag(y_u)^-1 and diag(y_l)^-1
             # to make the matrix symmetric
-            inv_dia_y_u = spa.diags(np.reciprocal(y_u + 1e-20))
-            inv_dia_y_l = spa.diags(np.reciprocal(y_l + 1e-20))
+            inv_dia_y_u = spa.diags(np.reciprocal(y_u))
+            inv_dia_y_l = spa.diags(np.reciprocal(y_l))
             M = spa.bmat([
                 [P,            A.T,                  -A.T],
                 [A, spa.diags(A @ x - u) @ inv_dia_y_u, None],
                 [-A, None, spa.diags(l - A @ x) @ inv_dia_y_l]
             ], format='csc')
+            #  inv_dia_y_u = spa.diags(np.reciprocal(y_u + 1e-08))
+            #  inv_dia_y_l = spa.diags(np.reciprocal(y_l + 1e-08))
+            #  M = spa.bmat([
+            #      [P,            A.T,                  -A.T],
+            #      [A, spa.diags(A @ x - u) @ inv_dia_y_u, None],
+            #      [-A, None, spa.diags(l - A @ x) @ inv_dia_y_l]
+            #  ], format='csc')
             delta = spa.bmat([[eps_iter_ref * spa.eye(n), None],
                               [None, -eps_iter_ref * spa.eye(2 * m)]],
                              format='csc')
             self._derivative_cache['M'] = M
             self._derivative_cache['solver'] = qdldl.Solver(M + delta)
 
+        # Define clean linear system (working)
+        #  di_y_u = spa.diags(y_u)
+        #  di_y_l = spa.diags(y_l)
+        #  M = spa.bmat([
+        #      [P,            A.T,                  -A.T],
+        #      [di_y_u @ A, spa.diags(A @ x - u), None],
+        #      [-di_y_l @ A, None, spa.diags(l - A @ x)]
+        #  ], format='csc')
+        #
         rhs = - np.concatenate([dx, dy_u, dy_l])
 
+        #  import scipy.sparse.linalg as sla
+        #  r_sol = sla.spsolve(M.T, rhs)
         r_sol = self.derivative_iterative_refinement(rhs)
 
         r_x, r_yu, r_yl = np.split(r_sol, [n, n+m])
+
+        # Normalize (working)
+        #  r_yu = y_u * r_yu
+        #  r_yl = y_l * r_yl
+
+        #  import ipdb; ipdb.set_trace()
 
         # Extract derivatives for the constraints
         rows, cols = A_idx

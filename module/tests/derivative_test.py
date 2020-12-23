@@ -5,6 +5,7 @@ import numpy as np
 import numpy.random as npr
 from scipy import sparse
 from scipy.optimize import approx_fprime
+import numdifftools as nd
 import numpy.testing as npt
 
 # Unit Test
@@ -19,21 +20,22 @@ rel_tol = 1e-3
 abs_tol = 1e-3
 
 # OSQP settings
-eps_abs = 1e-10
-eps_rel = 1e-10
+eps_abs = 1e-6
+eps_rel = 1e-6
 max_iter = 10000
 
 
 class derivative_tests(unittest.TestCase):
 
-    def get_prob(self, n=10, m=3, P_scale=1., A_scale=1.):
+    def get_prob(self, n=20, m=5, P_scale=1., A_scale=1.):
         L = np.random.randn(n, n)
         P = sparse.csc_matrix(L.dot(L.T) + 5. * sparse.eye(n))
         x_0 = npr.randn(n)
         s_0 = npr.rand(m)
         A = sparse.csc_matrix(npr.randn(m, n))
         u = A.dot(x_0) + s_0
-        l = -5 - 10 * npr.rand(m)
+        l = u - 5 - 2 * npr.rand(m)
+        l[0] = -np.inf
         q = npr.randn(n)
         true_x = npr.randn(n)
 
@@ -74,7 +76,8 @@ class derivative_tests(unittest.TestCase):
             return 0.5 * np.sum(np.square(x_hat - true_x))
 
         dq = grad(q)
-        dq_fd = approx_fprime(q, f, grad_precision)
+        #  dq_fd = approx_fprime(q, f, grad_precision)
+        dq_fd = nd.Gradient(f)(q)
 
         if verbose:
             print('dq_fd: ', np.round(dq_fd, decimals=4))
@@ -107,13 +110,14 @@ class derivative_tests(unittest.TestCase):
             return 0.5 * np.sum(np.square(x_hat - true_x))
 
         dP = grad(P.data)
-        dP_fd_val = approx_fprime(P.data, f, grad_precision)
+        #  dP_fd_val = approx_fprime(P.data, f, grad_precision)
+        dP_fd_val = nd.Gradient(f)(P.data)
         dP_fd = sparse.csc_matrix((dP_fd_val, P_idx), shape=P.shape)
         dP_fd = (dP_fd + dP_fd.T)/2
 
         if verbose:
             print('dP_fd: ', np.round(dP_fd.data, decimals=4))
-            print('dA: ', np.round(dP.data, decimals=4))
+            print('dP: ', np.round(dP.data, decimals=4))
 
         npt.assert_allclose(dP.todense(), dP_fd.todense(),
                             rtol=rel_tol, atol=abs_tol)
@@ -143,7 +147,8 @@ class derivative_tests(unittest.TestCase):
             return 0.5 * np.sum(np.square(x_hat - true_x))
 
         dA = grad(A.data)
-        dA_fd_val = approx_fprime(A.data, f, grad_precision)
+        #  dA_fd_val = approx_fprime(A.data, f, grad_precision)
+        dA_fd_val = nd.Gradient(f)(A.data)
         dA_fd = sparse.csc_matrix((dA_fd_val, A_idx), shape=A.shape)
 
         if verbose:
@@ -175,7 +180,8 @@ class derivative_tests(unittest.TestCase):
             return 0.5 * np.sum(np.square(x_hat - true_x))
 
         dl = grad(l)
-        dl_fd = approx_fprime(l, f, grad_precision)
+        #  dl_fd = approx_fprime(l, f, grad_precision)
+        dl_fd = nd.Gradient(f)(l)
 
         if verbose:
             print('dl_fd: ', np.round(dl_fd, decimals=4))
@@ -206,7 +212,8 @@ class derivative_tests(unittest.TestCase):
             return 0.5 * np.sum(np.square(x_hat - true_x))
 
         du = grad(u)
-        du_fd = approx_fprime(u, f, grad_precision)
+        #  du_fd = approx_fprime(u, f, grad_precision)
+        du_fd = nd.Gradient(f)(u)
 
         if verbose:
             print('du_fd: ', np.round(du_fd, decimals=4))
