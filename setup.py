@@ -1,4 +1,3 @@
-import distutils.sysconfig as sysconfig
 import os
 import shutil as sh
 import sys
@@ -6,9 +5,9 @@ from glob import glob
 from platform import system
 from shutil import copyfile, copy
 from subprocess import call, check_output
-
 from setuptools import setup, Extension
 from setuptools.command.build_ext import build_ext
+import distutils.sysconfig as sysconfig
 
 import argparse
 

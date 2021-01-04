@@ -351,14 +351,18 @@ class OSQP(object):
         l, u = self._derivative_cache['l'], self._derivative_cache['u']
 
         # Extract index finite l and u
-        #  import ipdb; ipdb.set_trace()
-        #  osqp_infty = _osqp.constant('OSQP_INFTY')
-        #  l_finite_idx = l > -osqp_infty
-        #  u_finite_idx = u < osqp_infty
-        #  A_full = A
-        #  l_full = l
-        #  u_full = u
-        #  A_u = Vk
+        osqp_infty = _osqp.constant('OSQP_INFTY')
+        l_finite_idx = l > -osqp_infty
+        u_finite_idx = u < osqp_infty
+        A_u = A[u_finite_idx]
+        u = u[u_finite_idx]
+        m_u = len(u)
+        A_l = A[l_finite_idx]
+        l = l[l_finite_idx]
+        m_l = len(l)
+
+        # Map back finite index to full
+        # TODO implement
 
         try:
             results = self._derivative_cache['results']
@@ -377,8 +381,8 @@ class OSQP(object):
         y = results.y
         #  y_u = np.maximum(y, 0)
         #  y_l = -np.minimum(y, 0)
-        y_u = np.maximum(y, 1e-08)
-        y_l = -np.minimum(y, -1e-08)
+        y_u = np.maximum(y[u_finite_idx], 1e-08)
+        y_l = -np.minimum(y[l_finite_idx], -1e-08)
 
         # Debug
         #  import cvxpy as cp
@@ -398,9 +402,14 @@ class OSQP(object):
             P_idx = P.nonzero()
 
         if dy_u is None:
-            dy_u = np.zeros(m)
+            dy_u = np.zeros(m_u)
+        else:
+            dy_u = dy_u[u_finite_idx]
+
         if dy_l is None:
-            dy_l = np.zeros(m)
+            dy_l = np.zeros(m_l)
+        else:
+            dy_l = dy_l[l_finite_idx]
 
         # Make sure M matrix exists
         if 'M' not in self._derivative_cache:
@@ -409,9 +418,9 @@ class OSQP(object):
             inv_dia_y_u = spa.diags(np.reciprocal(y_u))
             inv_dia_y_l = spa.diags(np.reciprocal(y_l))
             M = spa.bmat([
-                [P,            A.T,                  -A.T],
-                [A, spa.diags(A @ x - u) @ inv_dia_y_u, None],
-                [-A, None, spa.diags(l - A @ x) @ inv_dia_y_l]
+                [P,            A_u.T,                  -A_l.T],
+                [A_u, spa.diags(A_u @ x - u) @ inv_dia_y_u, None],
+                [-A_l, None, spa.diags(l - A_l @ x) @ inv_dia_y_l]
             ], format='csc')
             #  inv_dia_y_u = spa.diags(np.reciprocal(y_u + 1e-08))
             #  inv_dia_y_l = spa.diags(np.reciprocal(y_l + 1e-08))
@@ -421,7 +430,7 @@ class OSQP(object):
             #      [-A, None, spa.diags(l - A @ x) @ inv_dia_y_l]
             #  ], format='csc')
             delta = spa.bmat([[eps_iter_ref * spa.eye(n), None],
-                              [None, -eps_iter_ref * spa.eye(2 * m)]],
+                              [None, -eps_iter_ref * spa.eye(m_u + m_l)]],
                              format='csc')
             self._derivative_cache['M'] = M
             self._derivative_cache['solver'] = qdldl.Solver(M + delta)
@@ -441,7 +450,7 @@ class OSQP(object):
         #  r_sol = sla.spsolve(M.T, rhs)
         r_sol = self.derivative_iterative_refinement(rhs)
 
-        r_x, r_yu, r_yl = np.split(r_sol, [n, n+m])
+        r_x, r_yu, r_yl = np.split(r_sol, [n, n+m_u])
 
         # Normalize (working)
         #  r_yu = y_u * r_yu
@@ -450,17 +459,40 @@ class OSQP(object):
         #  import ipdb; ipdb.set_trace()
 
         # Extract derivatives for the constraints
-        rows, cols = A_idx
-        dA_vals = (y_u[rows] - y_l[rows]) * r_x[cols] + \
-            (r_yu[rows] - r_yl[rows]) * x[cols]
-        dA = spa.csc_matrix((dA_vals, (rows, cols)), shape=A.shape)
-        du = - r_yu
-        dl = r_yl
+        rows, cols = A_u.nonzero()
+        dA_u_vals = y_u[rows] * r_x[cols] + r_yu[rows] * x[cols]
+        dA_u = spa.csc_matrix((dA_u_vals, (rows, cols)), shape=A_u.shape)
+
+        #  dA_u_full = spa.lil_matrix(A.shape)
+        dA_u_full = spa.csr_matrix((np.zeros(A.nnz), A_idx), shape=A.shape)
+        dA_u_full[u_finite_idx, :] = dA_u
+
+        rows, cols = A_l.nonzero()
+        dA_l_vals = - y_l[rows] * r_x[cols] - r_yl[rows] * x[cols]
+        dA_l = spa.csc_matrix((dA_l_vals, (rows, cols)), shape=A_l.shape)
+        #  dA_l_full = spa.lil_matrix(A.shape)
+        dA_l_full = spa.csr_matrix((np.zeros(A.nnz), A_idx), shape=A.shape)
+        dA_l_full[l_finite_idx, :] = dA_l
+
+        dA = dA_u_full + dA_l_full
+
+        #  dA_vals = (y_u[rows] - y_l[rows]) * r_x[cols] + \
+        #      (r_yu[rows] - r_yl[rows]) * x[cols]
+        #  dA = spa.csc_matrix((dA_vals, (rows, cols)), shape=A.shape)
+        #  du = - r_yu
+        #  dl = r_yl
+        du = np.zeros(m)
+        du[u_finite_idx] = - r_yu
+        dl = np.zeros(m)
+        dl[l_finite_idx] = r_yl
 
         # Extract derivatives for the cost (P, q)
         rows, cols = P_idx
         dP_vals = .5 * (r_x[rows] * x[cols] + r_x[cols] * x[rows])
         dP = spa.csc_matrix((dP_vals, P_idx), shape=P.shape)
         dq = r_x
+
+
+        import ipdb; ipdb.set_trace()
 
         return (dP, dq, dA, dl, du)
