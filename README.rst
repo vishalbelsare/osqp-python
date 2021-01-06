@@ -1,11 +1,8 @@
 Python interface for OSQP
 =========================
 
-.. image:: https://travis-ci.org/oxfordcontrol/osqp-python.svg?branch=master
-    :target: https://travis-ci.org/oxfordcontrol/osqp-python
-
-.. image:: https://ci.appveyor.com/api/projects/status/79kru1jue00xsr2l/branch/master?svg=true
-    :target: https://ci.appveyor.com/project/bstellato/osqp-python/
+.. image:: https://github.com/oxfordcontrol/qdldl-python/workflows/Build/badge.svg?branch=master
+   :target: https://github.com/oxfordcontrol/osqp-python/actions
 
 
 Python wrapper for `OSQP <https://osqp.org/>`__: the Operator
@@ -34,5 +31,4 @@ The interface is documented `here <https://osqp.org/>`__.
 
 Packaging
 ---------
-This repository just performs the tests and does not build any python package.
-We use the external repositories for `conda recipes <https://github.com/oxfordcontrol/osqp-recipes>`_ and `python wheels <https://github.com/oxfordcontrol/osqp-wheels>`_.
+This repository performs the tests and builds the pypi wheels. Conda packages are on `conda-forge <https://github.com/conda-forge/osqp-feedstock>`__.
